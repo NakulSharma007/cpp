@@ -1,0 +1,323 @@
+/*
+ * ===============================================================
+ *  PROJECT : Tic Tac Toe Game
+ *  LANGUAGE: C++ (Object Oriented Programming)
+ *  FILE    : TicTacToe.cpp
+ *
+ *  OOP concepts used:
+ *    1. Class & Object        - Board, Player, Game
+ *    2. Encapsulation         - private data + public methods
+ *    3. Inheritance           - HumanPlayer, ComputerPlayer : Player
+ *    4. Abstraction           - Player is an abstract class
+ *    5. Polymorphism          - virtual getMove() (runtime)
+ *    6. Constructors/Destructors
+ *    7. Composition           - Game HAS-A Board, Game HAS-A Players
+ *    8. Static members        - Game::totalGames counter
+ * ===============================================================
+ */
+
+#include <iostream>
+#include <string>
+#include <cstdlib>
+#include <ctime>
+#include <limits>
+using namespace std;
+
+/* ---------------------------------------------------------------
+ *  CLASS: Board
+ *  Responsibility: store the 3x3 grid, draw it, check win/draw.
+ * --------------------------------------------------------------- */
+class Board {
+private:
+    char cells[3][3];          // encapsulated data
+
+public:
+    Board()  { reset(); }      // constructor
+
+    void reset() {
+        char ch = '1';
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                cells[i][j] = ch++;     // cells show numbers 1-9
+    }
+
+    void display() const {
+        cout << "\n";
+        for (int i = 0; i < 3; i++) {
+            cout << "     ";
+            for (int j = 0; j < 3; j++) {
+                cout << " " << cells[i][j] << " ";
+                if (j < 2) cout << "|";
+            }
+            cout << "\n";
+            if (i < 2) cout << "     -----------\n";
+        }
+        cout << "\n";
+    }
+
+    // position: 1..9. returns true if the move was placed
+    bool placeMark(int position, char symbol) {
+        if (position < 1 || position > 9) return false;
+        int r = (position - 1) / 3;
+        int c = (position - 1) % 3;
+        if (cells[r][c] == 'X' || cells[r][c] == 'O') return false;
+        cells[r][c] = symbol;
+        return true;
+    }
+
+    bool isCellFree(int position) const {
+        if (position < 1 || position > 9) return false;
+        char ch = cells[(position - 1) / 3][(position - 1) % 3];
+        return ch != 'X' && ch != 'O';
+    }
+
+    bool isFull() const {
+        for (int p = 1; p <= 9; p++)
+            if (isCellFree(p)) return false;
+        return true;
+    }
+
+    bool hasWon(char s) const {
+        for (int i = 0; i < 3; i++) {
+            if (cells[i][0] == s && cells[i][1] == s && cells[i][2] == s) return true; // row
+            if (cells[0][i] == s && cells[1][i] == s && cells[2][i] == s) return true; // column
+        }
+        if (cells[0][0] == s && cells[1][1] == s && cells[2][2] == s) return true;     // diagonal
+        if (cells[0][2] == s && cells[1][1] == s && cells[2][0] == s) return true;     // diagonal
+        return false;
+    }
+};
+
+/* ---------------------------------------------------------------
+ *  CLASS: Player  (ABSTRACT BASE CLASS)
+ *  getMove() is a pure virtual function -> every kind of player
+ *  must decide its own move.  This gives runtime polymorphism.
+ * --------------------------------------------------------------- */
+class Player {
+protected:
+    string name;
+    char   symbol;
+    int    score;
+
+public:
+    Player(const string& n, char s) : name(n), symbol(s), score(0) {}
+    virtual ~Player() {}                       // virtual destructor
+
+    virtual int getMove(const Board& board) = 0;   // pure virtual
+
+    string getName()   const { return name; }
+    char   getSymbol() const { return symbol; }
+    int    getScore()  const { return score; }
+    void   addWin()          { score++; }
+};
+
+/* ---------------------------------------------------------------
+ *  CLASS: HumanPlayer  (inherits Player)
+ *  Reads the move from the keyboard with input validation.
+ * --------------------------------------------------------------- */
+class HumanPlayer : public Player {
+public:
+    HumanPlayer(const string& n, char s) : Player(n, s) {}
+
+    int getMove(const Board& board) override {
+        int pos;
+        while (true) {
+            cout << name << " (" << symbol << "), enter position (1-9): ";
+            if (!(cin >> pos)) {                       // not a number
+                cin.clear();
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                cout << "  Invalid input! Please enter a number.\n";
+                continue;
+            }
+            if (pos < 1 || pos > 9) {
+                cout << "  Number must be between 1 and 9.\n";
+            } else if (!board.isCellFree(pos)) {
+                cout << "  That cell is already taken. Try another.\n";
+            } else {
+                return pos;
+            }
+        }
+    }
+};
+
+/* ---------------------------------------------------------------
+ *  CLASS: ComputerPlayer  (inherits Player)
+ *  Simple AI strategy:
+ *    1. Win if possible        2. Block the opponent
+ *    3. Take the centre        4. Take a corner
+ *    5. Take any free cell
+ * --------------------------------------------------------------- */
+class ComputerPlayer : public Player {
+private:
+    char opponentSymbol;
+
+    // Does placing 'sym' at 'pos' win the game?
+    bool wouldWin(Board b, int pos, char sym) const {   // b is a COPY
+        b.placeMark(pos, sym);
+        return b.hasWon(sym);
+    }
+
+public:
+    ComputerPlayer(const string& n, char s, char opp)
+        : Player(n, s), opponentSymbol(opp) {}
+
+    int getMove(const Board& board) override {
+        cout << name << " (" << symbol << ") is thinking...\n";
+
+        for (int p = 1; p <= 9; p++)                       // 1. win
+            if (board.isCellFree(p) && wouldWin(board, p, symbol)) return p;
+
+        for (int p = 1; p <= 9; p++)                       // 2. block
+            if (board.isCellFree(p) && wouldWin(board, p, opponentSymbol)) return p;
+
+        if (board.isCellFree(5)) return 5;                 // 3. centre
+
+        int corners[4] = {1, 3, 7, 9};                     // 4. corners
+        int start = rand() % 4;
+        for (int i = 0; i < 4; i++) {
+            int p = corners[(start + i) % 4];
+            if (board.isCellFree(p)) return p;
+        }
+
+        for (int p = 1; p <= 9; p++)                       // 5. anything
+            if (board.isCellFree(p)) return p;
+
+        return -1;
+    }
+};
+
+/* ---------------------------------------------------------------
+ *  CLASS: Game
+ *  Controls the flow of the game. Uses COMPOSITION:
+ *  a Game owns one Board and two Player objects.
+ * --------------------------------------------------------------- */
+class Game {
+private:
+    Board   board;
+    Player* players[2];        // base-class pointers -> polymorphism
+    int     current;           // index of the player whose turn it is
+    int     draws;
+    static int totalGames;     // shared by every Game object
+
+public:
+    Game(Player* p1, Player* p2) : current(0), draws(0) {
+        players[0] = p1;
+        players[1] = p2;
+    }
+
+    ~Game() {                   // Game owns the players
+        delete players[0];
+        delete players[1];
+    }
+
+    static int getTotalGames() { return totalGames; }
+
+    void playRound() {
+        board.reset();
+        current = 0;
+        totalGames++;
+
+        while (true) {
+            board.display();
+            Player* p = players[current];
+            int move = p->getMove(board);     // runtime polymorphism
+            board.placeMark(move, p->getSymbol());
+
+            if (board.hasWon(p->getSymbol())) {
+                board.display();
+                cout << "*** " << p->getName() << " WINS! ***\n";
+                p->addWin();
+                return;
+            }
+            if (board.isFull()) {
+                board.display();
+                cout << "*** It's a DRAW! ***\n";
+                draws++;
+                return;
+            }
+            current = 1 - current;            // switch turn
+        }
+    }
+
+    void showScoreboard() const {
+        cout << "\n========== SCOREBOARD ==========\n";
+        cout << " " << players[0]->getName() << " (" << players[0]->getSymbol()
+             << ") : " << players[0]->getScore() << "\n";
+        cout << " " << players[1]->getName() << " (" << players[1]->getSymbol()
+             << ") : " << players[1]->getScore() << "\n";
+        cout << " Draws        : " << draws << "\n";
+        cout << " Games played : " << totalGames << "\n";
+        cout << "================================\n";
+    }
+};
+
+int Game::totalGames = 0;       // definition of the static member
+
+/* ---------------------------------------------------------------
+ *  Helper functions + main()
+ * --------------------------------------------------------------- */
+void showTitle() {
+    cout << "\n=====================================\n";
+    cout << "        TIC  TAC  TOE  (C++ OOP)      \n";
+    cout << "=====================================\n";
+    cout << "Board positions:\n";
+    cout << "      1 | 2 | 3\n";
+    cout << "     -----------\n";
+    cout << "      4 | 5 | 6\n";
+    cout << "     -----------\n";
+    cout << "      7 | 8 | 9\n";
+}
+
+int readMenuChoice() {
+    int ch;
+    while (true) {
+        cout << "\nChoose mode:\n"
+             << "  1. Player vs Player\n"
+             << "  2. Player vs Computer\n"
+             << "  3. Exit\n"
+             << "Enter choice: ";
+        if (cin >> ch && ch >= 1 && ch <= 3) return ch;
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout << "Invalid choice!\n";
+    }
+}
+
+int main() {
+    srand((unsigned)time(0));
+    showTitle();
+
+    int choice = readMenuChoice();
+    if (choice == 3) {
+        cout << "Goodbye!\n";
+        return 0;
+    }
+
+    string n1, n2;
+    cout << "Enter name of Player 1 (X): ";
+    cin >> n1;
+
+    Player* p1 = new HumanPlayer(n1, 'X');
+    Player* p2;
+
+    if (choice == 1) {
+        cout << "Enter name of Player 2 (O): ";
+        cin >> n2;
+        p2 = new HumanPlayer(n2, 'O');
+    } else {
+        p2 = new ComputerPlayer("Computer", 'O', 'X');
+    }
+
+    Game game(p1, p2);          // Game takes ownership of both players
+
+    char again;
+    do {
+        game.playRound();
+        game.showScoreboard();
+        cout << "\nPlay again? (y/n): ";
+        cin >> again;
+    } while (again == 'y' || again == 'Y');
+
+    cout << "\nThanks for playing! Total games: " << Game::getTotalGames() << "\n";
+    return 0;
+}
