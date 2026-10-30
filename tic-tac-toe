@@ -1,18 +1,30 @@
 /*
  * ===============================================================
- *  PROJECT : Tic Tac Toe Game
- *  LANGUAGE: C++ (Object Oriented Programming)
- *  FILE    : TicTacToe.cpp
+ * PROJECT : Tic Tac Toe Game  (with "AI Coach" USP)
+ * LANGUAGE: C++ (Object Oriented Programming)
+ * FILE    : TicTacToe.cpp
  *
- *  OOP concepts used:
- *    1. Class & Object        - Board, Player, Game
- *    2. Encapsulation         - private data + public methods
- *    3. Inheritance           - HumanPlayer, ComputerPlayer : Player
- *    4. Abstraction           - Player is an abstract class
- *    5. Polymorphism          - virtual getMove() (runtime)
- *    6. Constructors/Destructors
- *    7. Composition           - Game HAS-A Board, Game HAS-A Players
- *    8. Static members        - Game::totalGames counter
+ * OOP concepts used:
+ *  1. Class & Object   - Board, Player, AICoach, Leaderboard, Game
+ *  2. Encapsulation    - private data + public methods
+ *  3. Inheritance      - HumanPlayer, ComputerPlayer : Player
+ *  4. Abstraction      - Player is an abstract class
+ *  5. Polymorphism     - virtual getMove(), newRound(), isHuman()
+ *  6. Constructors/Destructors
+ *  7. Composition      - Game HAS-A Board, Game HAS-A Players
+ *  8. Static members   - Game::totalGames, AICoach (static methods)
+ *  9. Enumeration      - enum class Difficulty
+ * 10. Recursion + STL  - minimax search, vector, map, sort
+ * 11. File handling    - persistent leaderboard (leaderboard.txt)
+ *
+ * USP - "AI COACH":
+ *  (a) Three difficulty levels: Easy, Medium and Hard (unbeatable
+ *      minimax opponent that never loses).
+ *  (b) Live hints: type 0 and the coach suggests the best move and
+ *      says whether you can win, draw or are losing.
+ *  (c) Persistent leaderboard saved to a file between runs.
+ *
+ * Compile: g++ -std=c++11 TicTacToe.cpp -o TicTacToe
  * ===============================================================
  */
 
@@ -21,36 +33,41 @@
 #include <cstdlib>
 #include <ctime>
 #include <limits>
+#include <vector>
+#include <map>
+#include <algorithm>
+#include <fstream>
+#include <iomanip>
 using namespace std;
 
 /* ---------------------------------------------------------------
- *  CLASS: Board
- *  Responsibility: store the 3x3 grid, draw it, check win/draw.
+ * CLASS: Board
+ * Responsibility: store the 3x3 grid, draw it, check win/draw.
  * --------------------------------------------------------------- */
 class Board {
 private:
-    char cells[3][3];          // encapsulated data
+    char cells[3][3];                 // encapsulated data
 
 public:
-    Board()  { reset(); }      // constructor
+    Board() { reset(); }              // constructor
 
     void reset() {
         char ch = '1';
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++)
-                cells[i][j] = ch++;     // cells show numbers 1-9
+                cells[i][j] = ch++;   // cells show numbers 1-9
     }
 
     void display() const {
         cout << "\n";
         for (int i = 0; i < 3; i++) {
-            cout << "     ";
+            cout << " ";
             for (int j = 0; j < 3; j++) {
                 cout << " " << cells[i][j] << " ";
                 if (j < 2) cout << "|";
             }
             cout << "\n";
-            if (i < 2) cout << "     -----------\n";
+            if (i < 2) cout << "  -----------\n";
         }
         cout << "\n";
     }
@@ -89,47 +106,131 @@ public:
 };
 
 /* ---------------------------------------------------------------
- *  CLASS: Player  (ABSTRACT BASE CLASS)
- *  getMove() is a pure virtual function -> every kind of player
- *  must decide its own move.  This gives runtime polymorphism.
+ * CLASS: AICoach   (USP)
+ * The "brain" of the project. It uses the MINIMAX algorithm
+ * (recursion) to look at every possible continuation of the game
+ * and find the best move. It is used by:
+ *   - ComputerPlayer on HARD level  (unbeatable opponent)
+ *   - HumanPlayer when a hint is requested
+ * All members are static, so no object is needed.
+ * --------------------------------------------------------------- */
+class AICoach {
+private:
+    // Score of a position from the point of view of 'me'.
+    // +10 - depth : I win (earlier win = higher score)
+    // depth - 10  : I lose (later loss = higher score)
+    //  0          : draw
+    static int minimax(Board b, bool myTurn, char me, char opp, int depth) {
+        if (b.hasWon(me))  return 10 - depth;
+        if (b.hasWon(opp)) return depth - 10;
+        if (b.isFull())    return 0;
+
+        int best = myTurn ? -100 : 100;
+        for (int p = 1; p <= 9; p++) {
+            if (!b.isCellFree(p)) continue;
+            Board next = b;                          // try the move on a copy
+            next.placeMark(p, myTurn ? me : opp);
+            int score = minimax(next, !myTurn, me, opp, depth + 1);
+            best = myTurn ? max(best, score) : min(best, score);
+        }
+        return best;
+    }
+
+public:
+    // Returns the best position (1-9) for 'me'.
+    // If outScore is given, it receives the minimax score of that move.
+    static int bestMove(const Board& b, char me, char opp, int* outScore = 0) {
+        int bestPos = -1, bestScore = -100;
+        for (int p = 1; p <= 9; p++) {
+            if (!b.isCellFree(p)) continue;
+            Board next = b;
+            next.placeMark(p, me);
+            int score = minimax(next, false, me, opp, 1);
+            if (score > bestScore) {                 // first best move wins ties
+                bestScore = score;
+                bestPos = p;
+            }
+        }
+        if (outScore) *outScore = bestScore;
+        return bestPos;
+    }
+
+    // Plain-English verdict used in hints
+    static string verdict(int score) {
+        if (score > 0) return "you can force a WIN";
+        if (score < 0) return "against perfect play you are losing";
+        return "best play leads to a DRAW";
+    }
+};
+
+/* ---------------------------------------------------------------
+ * CLASS: Player (ABSTRACT BASE CLASS)
+ * getMove() is a pure virtual function -> every kind of player
+ * must decide its own move. This gives runtime polymorphism.
  * --------------------------------------------------------------- */
 class Player {
 protected:
     string name;
-    char   symbol;
-    int    score;
+    char symbol;
+    int score;
 
 public:
     Player(const string& n, char s) : name(n), symbol(s), score(0) {}
-    virtual ~Player() {}                       // virtual destructor
+    virtual ~Player() {}                              // virtual destructor
 
-    virtual int getMove(const Board& board) = 0;   // pure virtual
+    virtual int getMove(const Board& board) = 0;      // pure virtual
+    virtual void newRound() {}                        // hook: called at the start of each round
+    virtual bool isHuman() const { return true; }     // used by the leaderboard
 
-    string getName()   const { return name; }
-    char   getSymbol() const { return symbol; }
-    int    getScore()  const { return score; }
-    void   addWin()          { score++; }
+    string getName() const { return name; }
+    char getSymbol() const { return symbol; }
+    int getScore() const { return score; }
+    void addWin() { score++; }
 };
 
 /* ---------------------------------------------------------------
- *  CLASS: HumanPlayer  (inherits Player)
- *  Reads the move from the keyboard with input validation.
+ * CLASS: HumanPlayer (inherits Player)
+ * Reads the move from the keyboard with input validation.
+ * Typing 0 asks the AI Coach for a hint (3 hints per round).
  * --------------------------------------------------------------- */
 class HumanPlayer : public Player {
+private:
+    char opponentSymbol;
+    int hintsLeft;
+    static const int HINTS_PER_ROUND = 3;
+
+    void giveHint(const Board& board) {
+        if (hintsLeft == 0) {
+            cout << "  Coach: no hints left in this round.\n";
+            return;
+        }
+        hintsLeft--;
+        int score = 0;
+        int pos = AICoach::bestMove(board, symbol, opponentSymbol, &score);
+        cout << "  Coach: try position " << pos << " - "
+             << AICoach::verdict(score)
+             << " (hints left: " << hintsLeft << ")\n";
+    }
+
 public:
-    HumanPlayer(const string& n, char s) : Player(n, s) {}
+    HumanPlayer(const string& n, char s, char opp)
+        : Player(n, s), opponentSymbol(opp), hintsLeft(HINTS_PER_ROUND) {}
+
+    void newRound() override { hintsLeft = HINTS_PER_ROUND; }
 
     int getMove(const Board& board) override {
         int pos;
         while (true) {
-            cout << name << " (" << symbol << "), enter position (1-9): ";
+            cout << name << " (" << symbol << "), enter position (1-9, 0 = hint): ";
             if (!(cin >> pos)) {                       // not a number
                 cin.clear();
                 cin.ignore(numeric_limits<streamsize>::max(), '\n');
                 cout << "  Invalid input! Please enter a number.\n";
                 continue;
             }
-            if (pos < 1 || pos > 9) {
+            if (pos == 0) {
+                giveHint(board);
+            } else if (pos < 1 || pos > 9) {
                 cout << "  Number must be between 1 and 9.\n";
             } else if (!board.isCellFree(pos)) {
                 cout << "  That cell is already taken. Try another.\n";
@@ -141,15 +242,28 @@ public:
 };
 
 /* ---------------------------------------------------------------
- *  CLASS: ComputerPlayer  (inherits Player)
- *  Simple AI strategy:
- *    1. Win if possible        2. Block the opponent
- *    3. Take the centre        4. Take a corner
- *    5. Take any free cell
+ * ENUM: Difficulty (scoped enumeration)
+ * --------------------------------------------------------------- */
+enum class Difficulty { EASY = 1, MEDIUM = 2, HARD = 3 };
+
+string difficultyName(Difficulty d) {
+    switch (d) {
+        case Difficulty::EASY:   return "Easy";
+        case Difficulty::MEDIUM: return "Medium";
+        default:                 return "Hard";
+    }
+}
+
+/* ---------------------------------------------------------------
+ * CLASS: ComputerPlayer (inherits Player)  -  USP: 3 levels
+ *   EASY   : picks any free cell at random
+ *   MEDIUM : win -> block -> centre -> corner -> any (rule based)
+ *   HARD   : asks the AICoach (minimax) - cannot be beaten
  * --------------------------------------------------------------- */
 class ComputerPlayer : public Player {
 private:
     char opponentSymbol;
+    Difficulty level;
 
     // Does placing 'sym' at 'pos' win the game?
     bool wouldWin(Board b, int pos, char sym) const {   // b is a COPY
@@ -157,55 +271,142 @@ private:
         return b.hasWon(sym);
     }
 
-public:
-    ComputerPlayer(const string& n, char s, char opp)
-        : Player(n, s), opponentSymbol(opp) {}
+    int easyMove(const Board& board) const {
+        vector<int> freeCells;
+        for (int p = 1; p <= 9; p++)
+            if (board.isCellFree(p)) freeCells.push_back(p);
+        return freeCells[rand() % freeCells.size()];
+    }
 
-    int getMove(const Board& board) override {
-        cout << name << " (" << symbol << ") is thinking...\n";
-
-        for (int p = 1; p <= 9; p++)                       // 1. win
+    int mediumMove(const Board& board) const {
+        for (int p = 1; p <= 9; p++)                    // 1. win
             if (board.isCellFree(p) && wouldWin(board, p, symbol)) return p;
-
-        for (int p = 1; p <= 9; p++)                       // 2. block
+        for (int p = 1; p <= 9; p++)                    // 2. block
             if (board.isCellFree(p) && wouldWin(board, p, opponentSymbol)) return p;
-
-        if (board.isCellFree(5)) return 5;                 // 3. centre
-
-        int corners[4] = {1, 3, 7, 9};                     // 4. corners
+        if (board.isCellFree(5)) return 5;              // 3. centre
+        int corners[4] = {1, 3, 7, 9};                  // 4. corners
         int start = rand() % 4;
         for (int i = 0; i < 4; i++) {
             int p = corners[(start + i) % 4];
             if (board.isCellFree(p)) return p;
         }
-
-        for (int p = 1; p <= 9; p++)                       // 5. anything
+        for (int p = 1; p <= 9; p++)                    // 5. anything
             if (board.isCellFree(p)) return p;
-
         return -1;
+    }
+
+public:
+    ComputerPlayer(const string& n, char s, char opp, Difficulty d)
+        : Player(n, s), opponentSymbol(opp), level(d) {}
+
+    bool isHuman() const override { return false; }
+
+    int getMove(const Board& board) override {
+        cout << name << " (" << symbol << ") is thinking...\n";
+        switch (level) {
+            case Difficulty::EASY:   return easyMove(board);
+            case Difficulty::MEDIUM: return mediumMove(board);
+            default:                 return AICoach::bestMove(board, symbol, opponentSymbol);
+        }
     }
 };
 
 /* ---------------------------------------------------------------
- *  CLASS: Game
- *  Controls the flow of the game. Uses COMPOSITION:
- *  a Game owns one Board and two Player objects.
+ * CLASS: Leaderboard   (USP)
+ * Keeps wins / losses / draws of every HUMAN player and stores
+ * them in leaderboard.txt, so records survive after the program
+ * closes (file handling + STL map).
+ * --------------------------------------------------------------- */
+struct Record {
+    int wins, losses, draws;
+    Record() : wins(0), losses(0), draws(0) {}
+};
+
+class Leaderboard {
+private:
+    string filename;
+    map<string, Record> data;           // player name -> record
+
+    void load() {
+        ifstream in(filename.c_str());
+        string n;
+        Record r;
+        while (in >> n >> r.wins >> r.losses >> r.draws)
+            data[n] = r;
+    }
+
+    void save() const {
+        ofstream out(filename.c_str());
+        for (map<string, Record>::const_iterator it = data.begin(); it != data.end(); ++it)
+            out << it->first << " " << it->second.wins << " "
+                << it->second.losses << " " << it->second.draws << "\n";
+    }
+
+    static bool better(const pair<string, Record>& a, const pair<string, Record>& b) {
+        if (a.second.wins != b.second.wins) return a.second.wins > b.second.wins;
+        if (a.second.losses != b.second.losses) return a.second.losses < b.second.losses;
+        return a.first < b.first;
+    }
+
+public:
+    Leaderboard(const string& f = "leaderboard.txt") : filename(f) { load(); }
+
+    void recordWin(const Player& winner, const Player& loser) {
+        if (winner.isHuman()) data[winner.getName()].wins++;
+        if (loser.isHuman())  data[loser.getName()].losses++;
+        save();
+    }
+
+    void recordDraw(const Player& a, const Player& b) {
+        if (a.isHuman()) data[a.getName()].draws++;
+        if (b.isHuman()) data[b.getName()].draws++;
+        save();
+    }
+
+    void show() const {
+        if (data.empty()) {
+            cout << "\nLeaderboard is empty. Play a game first!\n";
+            return;
+        }
+        vector< pair<string, Record> > rows(data.begin(), data.end());
+        sort(rows.begin(), rows.end(), better);
+        cout << "\n============ LEADERBOARD ============\n";
+        cout << " Rank  " << left << setw(12) << "Player"
+             << right << setw(5) << "Won" << setw(6) << "Lost" << setw(7) << "Drawn" << "\n";
+        cout << " -------------------------------------\n";
+        for (size_t i = 0; i < rows.size(); i++) {
+            cout << " " << setw(3) << (i + 1) << "   " << left << setw(12) << rows[i].first
+                 << right << setw(5) << rows[i].second.wins
+                 << setw(6) << rows[i].second.losses
+                 << setw(7) << rows[i].second.draws << "\n";
+        }
+        cout << "=====================================\n";
+    }
+};
+
+/* ---------------------------------------------------------------
+ * CLASS: Game
+ * Controls the flow of the game. Uses COMPOSITION:
+ * a Game owns one Board and two Player objects.
+ * It only USES the Leaderboard (aggregation - not owned).
  * --------------------------------------------------------------- */
 class Game {
 private:
-    Board   board;
+    Board board;
     Player* players[2];        // base-class pointers -> polymorphism
-    int     current;           // index of the player whose turn it is
-    int     draws;
+    Leaderboard* leaderboard;  // shared, not owned
+    int current;               // index of the player whose turn it is
+    int draws;
     static int totalGames;     // shared by every Game object
 
 public:
-    Game(Player* p1, Player* p2) : current(0), draws(0) {
+    Game(Player* p1, Player* p2, Leaderboard* lb)
+        : leaderboard(lb), current(0), draws(0) {
         players[0] = p1;
         players[1] = p2;
     }
 
-    ~Game() {                   // Game owns the players
+    ~Game() {                  // Game owns the players
         delete players[0];
         delete players[1];
     }
@@ -214,28 +415,32 @@ public:
 
     void playRound() {
         board.reset();
+        players[0]->newRound();            // polymorphic: humans get fresh hints
+        players[1]->newRound();
         current = 0;
         totalGames++;
 
         while (true) {
             board.display();
             Player* p = players[current];
-            int move = p->getMove(board);     // runtime polymorphism
+            int move = p->getMove(board);              // runtime polymorphism
             board.placeMark(move, p->getSymbol());
 
             if (board.hasWon(p->getSymbol())) {
                 board.display();
                 cout << "*** " << p->getName() << " WINS! ***\n";
                 p->addWin();
+                leaderboard->recordWin(*p, *players[1 - current]);
                 return;
             }
             if (board.isFull()) {
                 board.display();
                 cout << "*** It's a DRAW! ***\n";
                 draws++;
+                leaderboard->recordDraw(*players[0], *players[1]);
                 return;
             }
-            current = 1 - current;            // switch turn
+            current = 1 - current;                     // switch turn
         }
     }
 
@@ -250,22 +455,23 @@ public:
         cout << "================================\n";
     }
 };
-
-int Game::totalGames = 0;       // definition of the static member
+int Game::totalGames = 0;     // definition of the static member
 
 /* ---------------------------------------------------------------
- *  Helper functions + main()
+ * Helper functions + main()
  * --------------------------------------------------------------- */
 void showTitle() {
     cout << "\n=====================================\n";
-    cout << "        TIC  TAC  TOE  (C++ OOP)      \n";
+    cout << "     TIC TAC TOE  (C++ OOP)\n";
+    cout << "        with AI COACH\n";
     cout << "=====================================\n";
     cout << "Board positions:\n";
-    cout << "      1 | 2 | 3\n";
-    cout << "     -----------\n";
-    cout << "      4 | 5 | 6\n";
-    cout << "     -----------\n";
-    cout << "      7 | 8 | 9\n";
+    cout << "   1 | 2 | 3\n";
+    cout << "  -----------\n";
+    cout << "   4 | 5 | 6\n";
+    cout << "  -----------\n";
+    cout << "   7 | 8 | 9\n";
+    cout << "Tip: type 0 during your turn to get a hint.\n";
 }
 
 int readMenuChoice() {
@@ -274,9 +480,25 @@ int readMenuChoice() {
         cout << "\nChoose mode:\n"
              << "  1. Player vs Player\n"
              << "  2. Player vs Computer\n"
-             << "  3. Exit\n"
+             << "  3. View leaderboard\n"
+             << "  4. Exit\n"
              << "Enter choice: ";
-        if (cin >> ch && ch >= 1 && ch <= 3) return ch;
+        if (cin >> ch && ch >= 1 && ch <= 4) return ch;
+        cin.clear();
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout << "Invalid choice!\n";
+    }
+}
+
+Difficulty readDifficulty() {
+    int ch;
+    while (true) {
+        cout << "\nChoose difficulty:\n"
+             << "  1. Easy   (random moves)\n"
+             << "  2. Medium (rule based)\n"
+             << "  3. Hard   (unbeatable AI Coach)\n"
+             << "Enter choice: ";
+        if (cin >> ch && ch >= 1 && ch <= 3) return static_cast<Difficulty>(ch);
         cin.clear();
         cin.ignore(numeric_limits<streamsize>::max(), '\n');
         cout << "Invalid choice!\n";
@@ -285,10 +507,19 @@ int readMenuChoice() {
 
 int main() {
     srand((unsigned)time(0));
-    showTitle();
+    Leaderboard leaderboard;           // loads leaderboard.txt if it exists
 
-    int choice = readMenuChoice();
-    if (choice == 3) {
+    showTitle();
+    int choice;
+    while (true) {
+        choice = readMenuChoice();
+        if (choice == 3) {
+            leaderboard.show();
+            continue;
+        }
+        break;
+    }
+    if (choice == 4) {
         cout << "Goodbye!\n";
         return 0;
     }
@@ -296,19 +527,19 @@ int main() {
     string n1, n2;
     cout << "Enter name of Player 1 (X): ";
     cin >> n1;
-
-    Player* p1 = new HumanPlayer(n1, 'X');
+    Player* p1 = new HumanPlayer(n1, 'X', 'O');
     Player* p2;
 
     if (choice == 1) {
         cout << "Enter name of Player 2 (O): ";
         cin >> n2;
-        p2 = new HumanPlayer(n2, 'O');
+        p2 = new HumanPlayer(n2, 'O', 'X');
     } else {
-        p2 = new ComputerPlayer("Computer", 'O', 'X');
+        Difficulty level = readDifficulty();
+        p2 = new ComputerPlayer("Computer (" + difficultyName(level) + ")", 'O', 'X', level);
     }
 
-    Game game(p1, p2);          // Game takes ownership of both players
+    Game game(p1, p2, &leaderboard);   // Game takes ownership of both players
 
     char again;
     do {
@@ -318,6 +549,7 @@ int main() {
         cin >> again;
     } while (again == 'y' || again == 'Y');
 
+    leaderboard.show();
     cout << "\nThanks for playing! Total games: " << Game::getTotalGames() << "\n";
     return 0;
 }
